@@ -14,7 +14,6 @@ jobs:
 
       - name: Inline Three.js for offline
         run: |
-          ASSET="app/src/main/assets/index.html"
           curl -sSL -o three.min.js https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js
           node <<'EOF'
           const fs = require('fs');
@@ -27,7 +26,7 @@ jobs:
             fs.writeFileSync(asset, h);
             console.log('Three.js inlined, bytes:', three.length);
           } else {
-            console.log('WARN: three.js tag not found (already inlined?)');
+            console.log('WARN: three.js tag not found');
           }
           EOF
 
@@ -40,15 +39,13 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Set up Gradle 8.4
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.4'
+
       - name: Build debug APK
-        run: |
-          chmod +x ./gradlew 2>/dev/null || true
-          if [ -f ./gradlew ]; then
-            ./gradlew assembleDebug --no-daemon --stacktrace
-          else
-            gradle wrapper --gradle-version 8.4
-            ./gradlew assembleDebug --no-daemon --stacktrace
-          fi
+        run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
