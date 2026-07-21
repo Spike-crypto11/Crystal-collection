@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#F2EFE9">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="크리스탈 컬렉션">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
 <title>크리스탈 컬렉션</title>
 <style>
   :root{
@@ -193,20 +199,15 @@
   }
   .stage{flex:1;position:relative;min-height:0}
   #well{display:block;width:100%;height:100%}
-  .pad{
-    display:grid;grid-template-columns:repeat(5,1fr);gap:8px;
-    padding:10px 14px max(14px,env(safe-area-inset-bottom));
-    border-top:1px solid var(--line);
-  }
-  .pad button{
-    height:52px;border:1px solid var(--line);border-radius:12px;background:var(--pane);
-    color:var(--ink);font-size:12px;font-family:var(--sans);cursor:pointer;
-    display:flex;align-items:center;justify-content:center;
-  }
-  .pad button:active{background:var(--marble-2)}
-  .pad button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
-  @media(min-width:900px){.pad{display:none}}
   .kbhint{display:none;text-align:center;font-size:11px;color:var(--ink-soft);padding:10px}
+  .touchhint{
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    background:rgba(35,34,42,0.82); color:#fff; padding:14px 18px; border-radius:14px;
+    font-size:13px; line-height:1.7; text-align:center; pointer-events:none;
+    opacity:0; transition:opacity .4s ease; z-index:30; max-width:80%;
+  }
+  .touchhint.show{opacity:1}
+  @media(min-width:900px){.touchhint{display:none}}
   @media(min-width:900px){.kbhint{display:block}}
 
   .overlay{
@@ -385,14 +386,8 @@
     </div>
   </div>
 
-  <div class="pad">
-    <button id="p-left" aria-label="왼쪽">←</button>
-    <button id="p-rot" aria-label="회전">↻</button>
-    <button id="p-right" aria-label="오른쪽">→</button>
-    <button id="p-down" aria-label="한 칸 내리기">↓</button>
-    <button id="p-drop" aria-label="바로 떨어뜨리기">⤓</button>
-  </div>
   <div class="kbhint">← → 이동 · ↑ 회전 · ↓ 소프트 드롭 · Space 하드 드롭 · P 일시정지</div>
+  <div class="touchhint" id="touchhint">화면을 좌우로 쓸어 이동<br>톡 치면 회전<br>아래로 천천히 = 소프트 드롭<br>아래로 확 밀면 = 하드 드롭</div>
 </section>
 
 <!-- ================= CANDY MATCH ================= -->
@@ -1848,6 +1843,22 @@ function startGame() {
   updateHUD();
   render();
   requestAnimationFrame(resize);
+  maybeShowTouchHint();
+}
+
+// 터치 기기에서 처음 몇 번만 제스처 힌트를 잠깐 보여준다
+function maybeShowTouchHint() {
+  var hint = document.getElementById("touchhint");
+  if (!hint) return;
+  var isTouch = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
+  if (!isTouch) return;
+  var seen = 0;
+  try { seen = parseInt(Store.data.tetrisHintSeen || 0, 10); } catch (e) {}
+  if (seen >= 3) return;   // 3번까지만
+  hint.classList.add("show");
+  setTimeout(function () { hint.classList.remove("show"); }, 3200);
+  Store.data.tetrisHintSeen = seen + 1;
+  Store.save();
 }
 
 function pause() {
@@ -1998,12 +2009,102 @@ ovSub.addEventListener("click", function () {
   updateHubRecords();
 });
 
-bindHold("p-left", function () { if (active()) move(-1); });
-bindHold("p-right", function () { if (active()) move(1); });
-bindHold("p-down", function () { if (active()) softDrop(); },
-  function () { return SDR; }, function () { return SDR; });
-bindTap("p-rot", function () { if (active()) tryRotate(); });
-bindTap("p-drop", function () { if (active()) hardDrop(); });
+
+/* ---- 우물 화면 터치 제스처 ----
+   좌우 스와이프=이동, 아래 스와이프=소프트드롭, 아래로 빠른 플릭=하드드롭, 탭=회전 */
+(function () {
+  var startX = 0, startY = 0, startT = 0;
+  var lastX = 0, lastY = 0;
+  var movedCols = 0, softRows = 0, lastMoveT = 0;
+  var stepPx = 26;          // 몇 px마다 한 칸 (레이아웃에서 갱신)
+  var didMove = false, hardDropped = false;
+  var active2 = false;
+
+  function cellPx() {
+    // 우물 한 칸의 화면 px (resize에서 계산된 wellCellPx 사용, 없으면 추정)
+    return (typeof wellCellPx === "number" && wellCellPx > 0) ? wellCellPx : 26;
+  }
+
+  function onStart(e) {
+    if (!document.getElementById("game").classList.contains("on")) return;
+    if (!active()) return;
+    var t = e.touches ? e.touches[0] : e;
+    startX = lastX = t.clientX;
+    startY = lastY = t.clientY;
+    startT = Date.now();
+    movedCols = 0; softRows = 0; lastMoveT = startT;
+    didMove = false; hardDropped = false;
+    active2 = true;
+    stepPx = Math.max(18, cellPx() * 0.9);   // 한 칸 이동에 필요한 스와이프 거리
+    e.preventDefault();
+  }
+
+  function onMove(e) {
+    if (!active2 || !active()) return;
+    var t = e.touches ? e.touches[0] : e;
+    var dx = t.clientX - lastX;
+    var dy = t.clientY - lastY;
+
+    // 좌우 이동: 누적 이동량이 한 칸을 넘으면 이동
+    while (Math.abs(dx) >= stepPx) {
+      if (dx > 0) { move(1); dx -= stepPx; }
+      else { move(-1); dx += stepPx; }
+      lastX = t.clientX - dx;
+      didMove = true;
+    }
+
+    // 아래로 끌기: 빠른 하강(플릭)은 보류하고 touchend에서 하드드롭 판정.
+    // 느린 하강만 소프트 드롭으로 처리.
+    var now = Date.now();
+    var vy = dy / Math.max(1, now - (lastMoveT || startT));  // px/ms
+    if (dy >= stepPx) {
+      if (vy < 0.7) {
+        // 느림 → 소프트 드롭
+        var rows = Math.floor(dy / stepPx);
+        for (var i = 0; i < rows; i++) { if (active()) softDrop(); }
+        lastY = t.clientY;
+        softRows += rows;
+        didMove = true;
+      } else {
+        // 빠름 → 플릭 후보, 소프트드롭 안 하고 기준만 갱신
+        lastY = t.clientY;
+        didMove = true;
+      }
+    } else if (dy < 0) {
+      lastY = t.clientY;
+    }
+    lastMoveT = now;
+    e.preventDefault();
+  }
+
+  function onEnd(e) {
+    if (!active2) return;
+    active2 = false;
+    var totalY = lastY - startY;
+    var totalX = lastX - startX;
+    var dt = Date.now() - startT;
+
+    // 빠른 아래 플릭 → 하드 드롭 (총 하강속도로 판정)
+    var vyTotal = totalY / Math.max(1, dt);   // px/ms
+    var flick = totalY > cellPx() * 2 && vyTotal > 0.7 && Math.abs(totalX) < cellPx() * 2;
+    if (flick && active()) {
+      hardDrop();
+      hardDropped = true;
+    } else if (!didMove && dt < 250 && Math.abs(totalX) < 14 && Math.abs(totalY) < 14) {
+      // 움직임 거의 없이 짧게 톡 → 회전
+      if (active()) tryRotate();
+    }
+    if (e && e.preventDefault) e.preventDefault();
+  }
+
+  var cv = wellCanvas;
+  if (cv) {
+    cv.addEventListener("touchstart", onStart, { passive: false });
+    cv.addEventListener("touchmove", onMove, { passive: false });
+    cv.addEventListener("touchend", onEnd, { passive: false });
+    cv.addEventListener("touchcancel", function () { active2 = false; }, { passive: false });
+  }
+})();
 
 /* ============================================================
    Candy Match — 앱 통합 (검증된 CandyCore 위에 UI/레벨/입력)
@@ -2996,6 +3097,14 @@ syncSpeed();
 updateHubRecords();
 
 })();
+</script>
+<script>
+/* PWA: 서비스워커 등록 (https/localhost에서만 동작, file://에선 무시) */
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  window.addEventListener("load", function () {
+    navigator.serviceWorker.register("sw.js").catch(function () {});
+  });
+}
 </script>
 </body>
 </html>
