@@ -1488,6 +1488,7 @@ var board = [];
 var bag = [], piece = null, nextQueue = [];   // 앞으로 나올 조각 3개
 var score = 0, level = 1, lines = 0;
 var dropTimer = 0, running = false, paused = false, over = false, lastT = 0;
+var clearAnim = null;   // 줄 삭제 직전, 가득 찬 모습을 잠깐 보여주는 단계
 
 function newBoard() {
   board = [];
@@ -1607,30 +1608,52 @@ function lock() {
   }
 
   if (full.length) {
-    for (var i2 = 0; i2 < full.length; i2++) spawnShards(full[i2]);
-    for (var i3 = full.length - 1; i3 >= 0; i3--) {
-      board.splice(full[i3], 1);
-      var blank = [];
-      for (var c2 = 0; c2 < COLS; c2++) blank.push(null);
-      board.unshift(blank);
-    }
-    lines += full.length;
-    score += [0, 100, 300, 500, 800][full.length] * level;
-    var nl = Math.floor(lines / 10) + 1;
-    if (nl > level) {
-      level = nl;
-      Audio2.levelUp();
-      Audio2.setIntensity((level - 1) / 12);
-    }
+    // 가득 찬 줄을 화면에 먼저 보여주고, 잠시 뒤 삭제한다.
+    // (예전엔 같은 순간에 지워져서 '안 찼는데 사라진' 것처럼 보였음)
+    piece = null;
+    render();
+    clearAnim = { rows: full, t: 0 };
     Audio2.clear(full.length);
+    return;
   }
 
+  nextPiece();
+}
+
+// 대기 줄에서 다음 조각 꺼내기
+function nextPiece() {
   piece = makePiece(nextQueue.shift());
   fillQueue();
   drawNext();
-
   if (!valid(absCells(piece, 0, 0))) { gameOver(); return; }
   dropTimer = 0;
+  render();
+}
+
+// 보여주기가 끝나면 실제로 줄을 지우고 점수 반영
+function finishClear() {
+  if (!clearAnim) return;
+  var full = clearAnim.rows;
+  clearAnim = null;
+
+  for (var i = 0; i < full.length; i++) spawnShards(full[i]);
+  for (var i3 = full.length - 1; i3 >= 0; i3--) {
+    board.splice(full[i3], 1);
+    var blank = [];
+    for (var c2 = 0; c2 < COLS; c2++) blank.push(null);
+    board.unshift(blank);
+  }
+  lines += full.length;
+  score += [0, 100, 300, 500, 800][full.length] * level;
+  var nl = Math.floor(lines / 10) + 1;
+  if (nl > level) {
+    level = nl;
+    Audio2.levelUp();
+    Audio2.setIntensity((level - 1) / 12);
+  }
+  updateHUD();
+  render();
+  nextPiece();
   updateHUD();
   render();
 }
@@ -1794,12 +1817,18 @@ function loop(t) {
   lastT = t;
 
   if (running && !paused && !over) {
-    stepAutoRepeat(dt * 1000);
-    dropTimer += dt * 1000;
-    if (dropTimer >= gravityFor(level)) {
-      dropTimer = 0;
-      if (piece && valid(absCells(piece, 0, 1))) { piece.y += 1; render(); }
-      else if (piece) lock();
+    if (clearAnim) {
+      // 가득 찬 줄을 보여주는 중 — 조작·중력 정지
+      clearAnim.t += dt * 1000;
+      if (clearAnim.t >= 180) finishClear();
+    } else {
+      stepAutoRepeat(dt * 1000);
+      dropTimer += dt * 1000;
+      if (dropTimer >= gravityFor(level)) {
+        dropTimer = 0;
+        if (piece && valid(absCells(piece, 0, 1))) { piece.y += 1; render(); }
+        else if (piece) lock();
+      }
     }
   }
   updateShards(dt);
@@ -1834,7 +1863,7 @@ function startGame() {
   piece = makePiece(pullType());
   fillQueue();
   score = 0; level = 1; lines = 0;
-  dropTimer = 0; over = false; paused = false; running = true;
+  dropTimer = 0; over = false; paused = false; running = true; clearAnim = null;
   clearGroup(shardGroup); shards = [];
   Audio2.setIntensity(0);
   Audio2.startMusic("tetris");
